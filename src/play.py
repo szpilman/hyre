@@ -13,6 +13,12 @@ from fuzzyfinder import fuzzyfinder
 from plumbum import local
 import climenu, re
 
+def get_audio_ext():
+    return ".wav"
+
+def get_hyre_ext():
+    return ".tnt"
+
 def get_session_root():
     return "/home/vic/datav/datav/"
 
@@ -29,7 +35,7 @@ def print_var(variable):
 def get_listing():
     listing = ls[get_session_repo()]().split()
     regex = re.compile(r'180717\d\d\d[-ivxlc]*\d?.wav')
-    selected = filter(regex.search, listing)
+    selected = list(filter(regex.search, listing))
     return selected
 
 def render_tracks(tracks, act):
@@ -45,14 +51,46 @@ def render_tracks(tracks, act):
         )
     return items
 
-session = {}
-def edit_session(word, act, act_all):
+session = {'__autoplay__': True, '__view__': 'Bigconcatfile.wav'}
+def edit_session(word, act, act_all, extra):
     tracks = get_listing()
     items = render_tracks(tracks, act)
     items.append(('%s all tracks' % word, partial(act_all, tracks)))
-    items.append(('Save session to catalog', print_var))
+    items.append(('Save session to catalog', partial(save_session, tracks)))
+    for e in extra:
+        items.append(e)
     session = {pair[0]: pair[0] for pair in items}
     return items
+
+def pad_three(pad, s):
+    l = len(s)
+    if l > 2:
+        return s[:3]
+    elif l == 2:
+        return " " + s if pad == 3 else s
+    else:
+        if pad == 3:
+            return "  " + s
+        else:
+            return " " + s if pad == 2 else s
+
+def save_session(tracks):
+    date = tracks[0][:6]
+    with open(get_session_metarepo() + date + get_hyre_ext(), "w") as f:
+        f.write('#+title: ' + date + '\n#+ppl-mod: ^UR\n#+stamp: ')
+        l = len(tracks)
+        pad = len(str(l))
+        p = partial(pad_three, pad)
+        for i in range(l):
+            t = tracks[i]
+            title = session[t] if t in session else t[:-4]
+            f.write('\n   ' + p(str(i + 1)) + '. ' + title)
+
+def change_session_autoplay(autoplay):
+    session['__autoplay__'] = autoplay
+
+def toggle_session_autoplay():
+    session['__autoplay__'] = not session['__autoplay__']
 
 def add_to_session():
     tracks = get_listing()
@@ -61,21 +99,6 @@ def add_to_session():
 
 class OrderedCounter(Counter, OrderedDict):
     pass
-
-dmenu = local["dmenu"]
-def interact_title(track):
-    with open('play.tnt') as f:
-        seen = OrderedCounter([line[9:].strip() for line in f])
-        selection = echo["\n".join([k for k,v in seen.items() if v == 1])] | dmenu
-        session[track] = selection()[:-1]
-        print(session)
-
-def interact_titles(tracks):
-    with open('play.tnt') as f:
-        seen = OrderedCounter([line[9:].strip() for line in f])
-        selection = echo["\n".join([k for k,v in seen.items() if v == 1])] | dmenu
-        print(selection())
-
 
 play = local["play"]
 smenu = local["smenu"]
@@ -94,14 +117,36 @@ def play_session(tracks):
         for track in tracks[1:]:
             session += AudioSegment.from_wav(track)
 
+dmenu = local["dmenu"]
+parallel = local["parallel"]
+def interact_title(track):
+    with open('play.tnt') as f:
+        seen = OrderedCounter([line[9:].strip() for line in f])
+        titles = "\n".join([k for k,v in seen.items() if v == 1])
+        if session['__autoplay__']:
+            file = get_session_repo() + track
+            selection = echo[titles] | parallel["--pipe", "0",
+                    play[file]] | dmenu
+        else:
+            selection = echo[titles] | dmenu
+        session[track] = selection()[:-1]
+        print(session)
+
+def interact_titles(tracks):
+    for track in tracks:
+        interact_title(track)
+
 @climenu.group(items_getter=edit_session, items_getter_kwargs={
-    'word': 'Play', 'act': play_track, 'act_all': play_session})
+    'word': 'Play', 'act': play_track, 'act_all': play_session,
+    'extra': []})
 def build_group():
     '''play track'''
     pass
 
 @climenu.group(items_getter=edit_session, items_getter_kwargs={#'count': 6,
-    'word': 'Tag', 'act': interact_title, 'act_all': interact_titles})
+    'word': 'Tag', 'act': interact_title, 'act_all': interact_titles,
+    'extra': [('|x| autoplay track when tagging',
+        toggle_session_autoplay)]})
 def build_group():
     '''tag track'''
     pass
