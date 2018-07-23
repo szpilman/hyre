@@ -7,54 +7,121 @@ history on the items starting with the given input text.
 """
 from functools import partial
 from itertools import groupby
-from plumbum.cmd import ls
+from collections import Counter, OrderedDict
+from plumbum.cmd import ls, echo
+from fuzzyfinder import fuzzyfinder
+from plumbum import local
 import climenu, re
 
+def get_session_root():
+    return "/home/vic/datav/datav/"
+
+def get_session_repo():
+    return get_session_root() + "tray/jul/"
+
+def get_session_metarepo():
+    return get_session_root() + "prod/gtar/2018/cata/jul/"
 
 def print_var(variable):
     '''print the variable'''
     print(str(variable))
 
 def get_listing():
-    listing = ls["/home/vic/datav/datav/tray/jul"]().split()
+    listing = ls[get_session_repo()]().split()
     regex = re.compile(r'180717\d\d\d[-ivxlc]*\d?.wav')
     selected = filter(regex.search, listing)
     return selected
 
-def build_items(count):
-    # In this example, we're generating menu items based on some
-    # thing that's determined at runtime (e.g. files in a directory).
-
-    # For this case, we're simply using `range` to generate a range of
-    # items.  The function that eventually gets called takes 1 argument.
-    # Therefore, we need to use ``partial`` to pass in those arguments at
-    # runtime.
+def render_tracks(tracks, act):
     items = []
-    for track in get_listing(): # range(count):
+    for track in tracks:
+        # strip out .wav extension from file name
+        t = session[track] if track in session else track[:-4]
         items.append(
             (
-                # 'Run item %i' % (index + 1),
-                track,
-                partial(print_var, 'Item %s' % track)
+                t,
+                partial(act, track)
             )
         )
-
     return items
 
-@climenu.menu(title='Do the first thing')
-def first_thing():
-    # A simple menu item
-    print('Did the first thing!')
+session = {}
+def edit_session(word, act, act_all):
+    tracks = get_listing()
+    items = render_tracks(tracks, act)
+    items.append(('%s all tracks' % word, partial(act_all, tracks)))
+    items.append(('Save session to catalog', print_var))
+    session = {pair[0]: pair[0] for pair in items}
+    return items
 
+def add_to_session():
+    tracks = get_listing()
+    items = render_tracks(tracks, play_track)
+    return items
 
-@climenu.group(items_getter=build_items, items_getter_kwargs={'count': 6})
-def build_group():
-    '''A dynamic menu'''
-    # This is just a placeholder for a MenuGroup.  The items in the menu
-    # will be dymanically generated when this module loads by calling
-    # `build_items`.
+class OrderedCounter(Counter, OrderedDict):
     pass
 
+dmenu = local["dmenu"]
+def interact_title(track):
+    with open('play.tnt') as f:
+        seen = OrderedCounter([line[9:].strip() for line in f])
+        selection = echo["\n".join([k for k,v in seen.items() if v == 1])] | dmenu
+        session[track] = selection()[:-1]
+        print(session)
+
+def interact_titles(tracks):
+    with open('play.tnt') as f:
+        seen = OrderedCounter([line[9:].strip() for line in f])
+        selection = echo["\n".join([k for k,v in seen.items() if v == 1])] | dmenu
+        print(selection())
+
+
+play = local["play"]
+smenu = local["smenu"]
+def play_track(track):
+    '''play the audio file track'''
+    path = get_session_repo() + track
+
+
+    #smenu[]
+    play[path]()
+
+def play_session(tracks):
+    from pydub import AudioSegment
+    if len(list(tracks)):
+        session = AudioSegment.from_wav(tracks[0])
+        for track in tracks[1:]:
+            session += AudioSegment.from_wav(track)
+
+@climenu.group(items_getter=edit_session, items_getter_kwargs={
+    'word': 'Play', 'act': play_track, 'act_all': play_session})
+def build_group():
+    '''play track'''
+    pass
+
+@climenu.group(items_getter=edit_session, items_getter_kwargs={#'count': 6,
+    'word': 'Tag', 'act': interact_title, 'act_all': interact_titles})
+def build_group():
+    '''tag track'''
+    pass
+
+@climenu.group(items_getter=add_to_session, items_getter_kwargs={})
+def build_group():
+    '''record new track'''
+    pass
+
+@climenu.group(items_getter=add_to_session, items_getter_kwargs={})
+def build_group():
+    '''search for track'''
+    pass
+
+@climenu.menu(title='about this software')
+def about():
+    # A simple menu item
+    print('Utility created by The Open Hyre')
+    print('This is open source work under the')
+    print('AGPLv3.')
 
 if __name__ == '__main__':
     climenu.run()
