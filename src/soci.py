@@ -14,16 +14,7 @@ def current_issue():
 
 climenu.settings.text['main_menu_title'] = 'soci.py'
 
-intromsg = """
-Hi {0},
-
-I'm writing a technical article for my newsletter, The Open Hyre, and your library {1} is used for parts of code shown and also used in an open source tool to be released.
-
-Since I'm using the library, I'd like to also feature {1} in the newsletter if it's fine with you. The newsletter's main and most important section is like classifieds for open source tasks. To feature {1}, I only need from you a task from your issues tracker that's easy to do for a beginner with Python/open source--it could be documentation or text corrections even.
-
-Thanks,
-Bernardo
-"""
+contactdir = 'contacts/python/'
 
 def get_hyre_ext():
     return ".tnt"
@@ -109,7 +100,7 @@ def make_session(name='[unnamed]', user='', repo='', email=''):
 
 session = make_session()
 sessionlist = {'pick': session, 'prev': session,
-        'list': current_issue(), 'curr': ''}
+        'list': current_issue(), 'curr': '', 'intro': 1}
 def set_session(s):
     session = s
 
@@ -132,15 +123,23 @@ def reset_list_pick():
 def timestamp():
     return arrow.now().format("DD/MM'YY HH:mm")
 
-def stamp(s):
-    return s + '\n#+stamp: {}\n'.format(timestamp())
+def stamp(s='', t=timestamp()):
+    return s + '\n#+stamp: {}\n'.format(t)
 
-def contact_front_matter(name, email):
+def contact_front_matter(name, email, keep_stamp=False, other=False):
     info = '#+title: {0}\n#+email: {1}\n'.format(name, email)
+    o = ''
+    if other:
+        for i in ['job', 'bio', 'page', 'loc']:
+            if i in other:
+                o += '#+{0}: {1}\n'.format(i, other[i])
     meta = '#+source: github'
-    return info + stamp(meta)
+    if keep_stamp:
+        return info + o + stamp(meta, keep_stamp)
+    else:
+        return info + o + stamp(meta)
 
-def serialize_session(s, require_filename=False):
+def serialize_session(s, require_filename=False, keep_stamp=False):
     name = s['name'] if 'name' in s else '[unnamed]'
     email = s['email'] if 'email' in s else ''
     #if 'user' in s and len(s['user']):
@@ -150,9 +149,14 @@ def serialize_session(s, require_filename=False):
     #    user = 'new_contact'
     user = s['user'] if 'user' in s and len(s['user']) else 'new_contact'
     contact = user + get_hyre_ext()
-    filepath = get_session_metarepo() + 'contacts/python/' + contact
+    filepath = get_session_metarepo() + contactdir + contact
     with open(filepath, "w+") as f:
-        f.write(contact_front_matter(name, email))
+        if 'stamp' in s:
+            st = s['stamp']
+        else:
+            st = stamp()
+            s['stamp'] = st
+        f.write(contact_front_matter(name, email, keep_stamp=st, other=s))
         text = '\n'
         l = current_issue()
         for msg in s['soci']:
@@ -251,7 +255,7 @@ def get_threadref_from_url(url):
     target = {'user': 'new_contact', 'repo': '-'}
     gh = url.find('github.com/')
     if gh > -1:
-        repo = url[gh + 11:]
+        repo = url[gh + 11:].strip()
         slash = repo.index('/')
         target['user'] = repo[:slash] 
         target['repo'] = repo[slash + 1:]
@@ -260,6 +264,23 @@ def get_threadref_from_url(url):
     target['threadref'] = '{0}/{1}/{2}'.format(sessionlist['list'],
             target['user'], target['repo'])
     return target
+
+def get_project_url(user, repo):
+    return 'https://github.com/{0}/{1}'.format(user, repo)
+
+intromsg = """
+Hi {0},
+
+I'm writing a technical article for my newsletter, The Open Hyre, and your library {1} is used for parts of code shown and also used in an open source tool to be released.
+
+Since I'm using the library, I'd like to also feature {1} in the newsletter if it's fine with you. The newsletter's main and most important section is like classifieds for open source tasks. To feature {1}, I only need from you a task from your issues tracker that's easy to do for a beginner with Python/open source--it could be documentation or text corrections even.
+
+Thanks,
+Bernardo
+"""
+
+def intro_msg(s):
+    return intromsg.format(s['name'].split(' ')[0], s['repo'])
 
 def get_last_message(s):
     soci = s['soci']
@@ -270,31 +291,35 @@ def get_contact_path(contact):
     dir = get_session_metarepo()
     ext = get_hyre_ext()
     e = '' if contact.endswith(ext) else ext
-    return dir + 'contacts/python/' + contact + e
+    return dir + contactdir + contact + e
 
 def load_contact(contact):
-    soci = []
-    name = '[unnamed]'
-    repo = ''
-    email = ''
-    status = '[unknown]'
-    last = ''
-    s = session
     ext = get_hyre_ext()
     if contact.endswith(ext):
         user = contact[: len(contact) - len(ext)]
     else:
         user = contact
     with open(get_contact_path(contact), "r") as f:
+        soci = []
+        name = '[unnamed]'
+        repo = ''
+        email = ''
+        stamp = ''
+        status = '[unknown]'
+        last = ''
+        l = ''
+        s = session
         for line in f.readlines():
-            if not line.startswith('#'):
-                i = len(soci) - 1
+            i = len(soci) - 1
+            if i > 0 and not line.startswith('#'):
                 if 'to' in soci[i]:
                     soci[i]['to'] += line
                 elif 'from' in soci[i]:
                     soci[i]['from'] += line
             elif line.startswith('#+title: '):
                 name = line[8:].strip()
+            elif line.startswith('#+stamp: '):
+                stamp = line[8:].strip()
             elif line.startswith('#+email: '):
                 email = line[8:].strip()
             elif line.startswith('#+'):
@@ -303,7 +328,7 @@ def load_contact(contact):
                 item = {}
                 if line[3:7] == 'to: ':
                     status = 'sent'
-                    item = {'to': '', 'date': line[8:]}
+                    item = {'to': '', 'date': line[7:].strip()}
                 if line[3:6] == 'to ':
                     status = 'outbox'
                     item = {'to': ''}
@@ -325,14 +350,30 @@ def load_contact(contact):
         s = make_session(name, user, repo, email)
         s['status'] = status
         s['soci'] = soci
+        if len(stamp):
+            s['stamp'] = stamp
         sessionlist[threadref] = s
         last = threadref
     return s
 
-#def load_create_contact(contact):
+def load_create_contact(usr, repository):
+    try:
+        return load_contact(usr)
+    except FileNotFoundError:
+        s = make_session(repo=repository, user=usr)
+        p = get_session_metarepo() + contactdir + usr + get_hyre_ext()
+        s['path'] = p
+        with open(p, "w+") as f:
+            f.write(contact_front_matter(s['name'], s['email']))
+            l = current_issue()
+            t = '# [{0}] {1} in a Python open source newsletter\n'
+            text = (t + '##+repo: {2}').format(l, repository,
+                    get_project_url(usr, repository)) + '\n'
+            text += '## to\n' + intro_msg() + '\n'
+            f.write(text)
+        return s
 
 #def load_contact_to_session():
-
 
 def scan_contacts():
     for contact in ls[get_session_metarepo()]().split():
@@ -360,7 +401,7 @@ def serialize_list(s, require_filename=False):
     #    user = 'new_contact'
     user = s['user'] if 'user' in s and len(s['user']) else 'new_contact'
     contact = user + get_hyre_ext()
-    filepath = get_session_metarepo() + 'contacts/python/' + contact
+    filepath = get_session_metarepo() + contactdir + contact
     with open(filepath, "w+") as f:
         f.write(contact_front_matter(name, email))
         text = '\n'
@@ -379,6 +420,7 @@ def serialize_list(s, require_filename=False):
 
 def select_list_project(project):
     sessionlist['curr'] = project
+    sessionlist['intro'] = 1
 
 def reset_list_selection():
     sessionlist['curr'] = ''
@@ -418,26 +460,68 @@ def list_threads(act):
 def autoput_contact_profile_info(s):
     data = xerox.paste()
     i = 0
-    for line in data.split():
+    for line in data.split('\n'):
         if len(line):
             if i == 0:
-                l = line.split(' ')
+                l = line.split()
                 s['name'] = l[0] + ' ' + l[1]
             elif i == 1:
                 s['bio'] = line
             elif i == 3:
-                s['job'] = line
+                s['job'] = line.strip()
             elif i == 4:
-                s['loc'] = line
+                s['loc'] = line.strip()
             elif i == 5:
-                s['email'] = line
+                s['email'] = line.strip()
             elif i == 6:
-                s['page'] = line
+                s['page'] = line.strip()
             i += 1
+    serialize_session(s)
 
+def set_intro(i):
+    sessionlist['intro'] = i
+
+def move_needle(s):
+    intro = sessionlist['intro']
+    if intro == 1:
+        xerox.copy(s['email'])
+    elif intro == 2:
+        xerox.copy(s['repo'] + ' in a Python open source newsletter')
+    elif intro == 3:
+        xerox.copy(intro_msg(s))
+    elif intro == 4:
+        set_session_attr('status', 'outbox')
+        add_to_thread(s, {'to': intro_msg()})
+    set_intro(intro + 1)
+
+def mark_as_sent(s):
+    s['status'] = 'sent'
+    return ''
+
+intro_steps = ['copy email', 'copy subject line', 'copy message']
 def add_status_actions(s, status, items):
-    items.append(('actions| |-+ add contact profile info',
+    #if len(s['soci']):
+    if len(s['email']) > 0:
+        intro = sessionlist['intro']
+        if intro >= 4:
+            items.append(('actions| |-+ mark as sent',
+                partial(mark_as_sent, s)))
+        else:
+            items.append(('actions| |-{0}+ {1}'.format(intro,
+                intro_steps[intro - 1]), partial(move_needle, s)))
+    else:
+        items.append(('actions| |-+ add contact profile info',
+            partial(autoput_contact_profile_info, s)))
+        items.append(('       |-+ search git log for contact info',
+            partial(autoput_contact_profile_info, s)))
+    items.append(('       | |-+ put intro message in outbox',
         partial(autoput_contact_profile_info, s)))
+    if 'repo2' in s:
+        items.append(('      |  |-+ switch secondary and primary repos',
+            partial(autoput_contact_profile_info, s)))
+    else:
+        items.append(('       |   |-+ add second repository to contact',
+            partial(autoput_contact_profile_info, s)))
     items.append(('       |-+ put intro message in outbox',
         partial(autoput_contact_profile_info, s)))
     items.append(('       vwv |-+ view last message',
@@ -456,20 +540,27 @@ def process_list_headers(lines):
 
 def add_list_prompt(n):
     l = len(n)
-    p = '{} item' if l == 1 else '{} items'
-    print(p.format(l) + '       | Select to see available actions:')
+    print('contacts: {}'.format(l)
+            + '   | Select to view available actions:')
 
-def pad_n(n, s):
+def pad_n(n, s, i):
     from math import floor
     d = n - len(s)
     if d % 2 == 0:
         x = int(d / 2)
         p = ''.join([' '] * x)
+        if i > 2:
+            if x >= 3:
+                p1 = ''.join([' '] * (x - 3))
+                return p + s + '({})'.format(i) + p1
+            elif x >= 2:
+                p1 = ''.join([' '] * (x - 3))
+                return p + s + p1 + '[{}'.format(i)
         return p + s + p
     else:
         x = int(floor(d / 2))
-        p = ''.join([' '] * x)
-        p1 = ''.join([' '] * (x + 1))
+        p = ''.join([' '] * (x + 1))
+        p1 = ''.join([' '] * x)
     return p1 + s + p
 
 def edit_list():
@@ -493,18 +584,22 @@ def edit_list():
                     prj = project.strip()
                     slash = prj.index('/')
                     user = prj[:slash]
-                    repo = prj[slash + 1:]
-                    c = load_contact(user)
+
+                    #repo = prj[slash + 1:]
+                    repo = prj[slash:].strip()
+
+                    c = load_create_contact(user, repo)
                     #return project + '[{}]'.format(c['status'])
                     #status = get_thread_status(project)
                     status = c['status']
-                    items.append(('{0}| {1}'.format(pad_n(9, status), 
-                        prj), partial(select_list_project, prj)))
+                    msgs = len(c['soci'])
+                    items.append(('{0}| {1}'.format(pad_n(9, status,
+                        msgs), prj), partial(select_list_project, prj)))
                     if prj == sessionlist['curr']:
-                        if session['repo'] == c['repo']:
+                        if len(c['repo']) and session['repo'] == c['repo']:
                             reset_list_selection()
                         else:
-                            set_session(c)
+                            change_session(c)
                             add_status_actions(c, status, items)
         except FileNotFoundError:
             print('[No items in list]')
