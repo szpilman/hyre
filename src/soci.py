@@ -3,14 +3,27 @@
 `soci` program
 
 Manages social contacts, lists and messages.
+That is, the Garden of Eden.
 """
 from functools import partial
-from plumbum.cmd import ls, mv
+from plumbum.cmd import ls
 import climenu, arrow, os, re, xerox
 
-current_issue = 'hyre-G001'
+def current_issue():
+    return 'hyre-G001'
 
 climenu.settings.text['main_menu_title'] = 'soci.py'
+
+intromsg = """
+Hi {0},
+
+I'm writing a technical article for my newsletter, The Open Hyre, and your library {1} is used for parts of code shown and also used in an open source tool to be released.
+
+Since I'm using the library, I'd like to also feature {1} in the newsletter if it's fine with you. The newsletter's main and most important section is like classifieds for open source tasks. To feature {1}, I only need from you a task from your issues tracker that's easy to do for a beginner with Python/open source--it could be documentation or text corrections even.
+
+Thanks,
+Bernardo
+"""
 
 def get_hyre_ext():
     return ".tnt"
@@ -23,6 +36,9 @@ def get_session_repo():
 
 def get_session_metarepo():
     return get_session_root() + "note/repo/soci/"
+
+def get_fork_prodrepo():
+    return get_session_root() + "prod/soci/2018/fork/"
 
 def get_last_thread(s):
     soci = s['soci']
@@ -66,14 +82,11 @@ def autoput_tray_data(target):
         else:
             add_to_thread(target, {'msg': data})
     else:
-        gh = data.find('github.com/')
-        if gh > -1:
-            repo = data[gh + 11:]
-            slash = repo.index('/')
-            target['user'] = repo[:slash] 
+        gh = get_threadref_from_url(data)
+        if gh['repo'] != '-':
+            target['user'] = gh['user']
             target['url'] = data
-            add_to_thread(target, {'repo': repo[slash + 1:],
-                'url': data})
+            add_to_thread(target, {'repo': gh['repo'], 'url': data})
         else:
             re_email = re.compile(data + '\w+@\w+')
             if re.compile(re_email).match(data):
@@ -95,7 +108,8 @@ def make_session(name='[unnamed]', user='', repo='', email=''):
     return ss
 
 session = make_session()
-sessionlist = {'pick': session, 'prev': session}
+sessionlist = {'pick': session, 'prev': session,
+        'list': current_issue(), 'curr': ''}
 def set_session(s):
     session = s
 
@@ -112,13 +126,19 @@ def revert_session():
     sessionlist['pick'] = prev
     set_session(prev)
 
+def reset_list_pick():
+    sessionlist['list'] = []
+
 def timestamp():
     return arrow.now().format("DD/MM'YY HH:mm")
 
+def stamp(s):
+    return s + '\n#+stamp: {}\n'.format(timestamp())
+
 def contact_front_matter(name, email):
     info = '#+title: {0}\n#+email: {1}\n'.format(name, email)
-    meta = '#+source: github\n#+stamp: {}\n'.format(timestamp())
-    return info + meta
+    meta = '#+source: github'
+    return info + stamp(meta)
 
 def serialize_session(s, require_filename=False):
     name = s['name'] if 'name' in s else '[unnamed]'
@@ -130,10 +150,11 @@ def serialize_session(s, require_filename=False):
     #    user = 'new_contact'
     user = s['user'] if 'user' in s and len(s['user']) else 'new_contact'
     contact = user + get_hyre_ext()
-    filepath = get_session_metarepo() + 'contacts/' + contact
+    filepath = get_session_metarepo() + 'contacts/python/' + contact
     with open(filepath, "w+") as f:
         f.write(contact_front_matter(name, email))
         text = '\n'
+        l = current_issue()
         for msg in s['soci']:
             if 'to' in msg:
                 text += '## to\n' + msg['to'] + '\n'
@@ -141,8 +162,8 @@ def serialize_session(s, require_filename=False):
                 text += '## from\n' + msg['from'] + '\n'
             elif 'repo' in msg:
                 t = '# [{0}] {1} in a Python open source newsletter\n'
-                text = (t + '##+repo: {2}').format(current_issue,
-                        msg['repo'], msg['url']) + text
+                text = (t + '##+repo: {2}').format(l, msg['repo'],
+                        msg['url']) + text
         f.write(text)
     return filepath
 
@@ -226,40 +247,101 @@ def add_to_thread_by_ref(r):
     s = get_thread_by_ref(r)
     autoput_tray_data(s)
 
-def scan_contacts():
-    dir = get_session_metarepo()
-    extlen = len(get_hyre_ext())
-    t = '#+title:'
-    e = '#+email:'
-    for contact in ls[dir]().split():
-        with open(dir + '/' + contact, "r") as f:
-            name = '[unnamed]'
-            email = ''
-            last = ''
-            for line in f.readlines():
-                if line.index(t):
-                    name = line[t:].strip()
-                elif line.index(e):
-                    email = line[e:].strip()
-                elif line.startswith('#+'):
-                    continue
-                elif line.startswith('# '):
-                    #if len(acc):
-                    slash = line.index('/')
-                    l = line[2:slash].strip()
-                    repo = line[slash:].strip()
-                    user = contact[: len(contact) - extlen]
-                    threadref = '{0}/{1}/{2}'.format(l, user, repo)
-                    s = make_session(name, user, repo, email)
-                    sessionlist[threadref] = s
-                    last = threadref
-                #elif line.startswith('## '):
+def get_threadref_from_url(url):
+    target = {'user': 'new_contact', 'repo': '-'}
+    gh = url.find('github.com/')
+    if gh > -1:
+        repo = url[gh + 11:]
+        slash = repo.index('/')
+        target['user'] = repo[:slash] 
+        target['repo'] = repo[slash + 1:]
+        target['project'] = repo
+        target['url'] = url
+    target['threadref'] = '{0}/{1}/{2}'.format(sessionlist['list'],
+            target['user'], target['repo'])
+    return target
 
-def list_threads(act):
-    '''Creates a list view of threads with their corresponding contact
-    names beside them.'''
-    scan_contacts()
-    items = []
+def get_last_message(s):
+    soci = s['soci']
+    item = soci[len(soci) - 1]
+    return item['to'] if 'to' in item else item['from']
+
+def get_contact_path(contact):
+    dir = get_session_metarepo()
+    ext = get_hyre_ext()
+    e = '' if contact.endswith(ext) else ext
+    return dir + 'contacts/python/' + contact + e
+
+def load_contact(contact):
+    soci = []
+    name = '[unnamed]'
+    repo = ''
+    email = ''
+    status = '[unknown]'
+    last = ''
+    s = session
+    ext = get_hyre_ext()
+    if contact.endswith(ext):
+        user = contact[: len(contact) - len(ext)]
+    else:
+        user = contact
+    with open(get_contact_path(contact), "r") as f:
+        for line in f.readlines():
+            if not line.startswith('#'):
+                i = len(soci) - 1
+                if 'to' in soci[i]:
+                    soci[i]['to'] += line
+                elif 'from' in soci[i]:
+                    soci[i]['from'] += line
+            elif line.startswith('#+title: '):
+                name = line[8:].strip()
+            elif line.startswith('#+email: '):
+                email = line[8:].strip()
+            elif line.startswith('#+'):
+                continue
+            elif line.startswith('## '):
+                item = {}
+                if line[3:7] == 'to: ':
+                    status = 'sent'
+                    item = {'to': '', 'date': line[8:]}
+                if line[3:6] == 'to ':
+                    status = 'outbox'
+                    item = {'to': ''}
+                elif line[3:7] == 'from':
+                    status = 'inbox'
+                    item = {'from': ''}
+                soci.append(item)
+            elif line.startswith('##+repo'):
+                t = get_threadref_from_url(line)
+                repo = t['repo']
+                if t['user'] != user:
+                    print('Contact name `{0}` different from repo owner `{1}`'.format(user, t['user']))
+            # header lines contain the list name
+            elif line.startswith('# '):
+                #if len(acc):
+                close = line.find('] ')
+                l = line[2:close].strip()
+        threadref = '{0}/{1}/{2}'.format(l, user, repo)
+        s = make_session(name, user, repo, email)
+        s['status'] = status
+        s['soci'] = soci
+        sessionlist[threadref] = s
+        last = threadref
+    return s
+
+#def load_create_contact(contact):
+
+#def load_contact_to_session():
+
+
+def scan_contacts():
+    for contact in ls[get_session_metarepo()]().split():
+        load_contact(contact)
+
+def get_list_path(l):
+    return get_session_repo() + l + get_hyre_ext()
+
+def get_list_sessions():
     for threadlist in ls[get_session_repo]().split():
         with open(threadlist, "r") as f:
             for repo in f.readlines():
@@ -267,6 +349,180 @@ def list_threads(act):
                 slash = repo.index('/')
                 label = repo[:slash] + ' - ' + repo[slash:]
                 items.append((label, partial(act, threadref)))
+
+def serialize_list(s, require_filename=False):
+    name = s['name'] if 'name' in s else '[unnamed]'
+    email = s['email'] if 'email' in s else ''
+    #if 'user' in s and len(s['user']):
+    #    user = s['user']
+    #    if require_filename and user == 'new_contact':
+    #else:
+    #    user = 'new_contact'
+    user = s['user'] if 'user' in s and len(s['user']) else 'new_contact'
+    contact = user + get_hyre_ext()
+    filepath = get_session_metarepo() + 'contacts/python/' + contact
+    with open(filepath, "w+") as f:
+        f.write(contact_front_matter(name, email))
+        text = '\n'
+        l = current_issue()
+        for msg in s['soci']:
+            if 'to' in msg:
+                text += '## to\n' + msg['to'] + '\n'
+            elif 'from' in msg:
+                text += '## from\n' + msg['from'] + '\n'
+            elif 'repo' in msg:
+                t = '# [{0}] {1} in a Python open source newsletter\n'
+                text = (t + '##+repo: {2}').format(l, msg['repo'],
+                        msg['url']) + text
+        f.write(text)
+    return filepath
+
+def select_list_project(project):
+    sessionlist['curr'] = project
+
+def reset_list_selection():
+    sessionlist['curr'] = ''
+
+def append_save_thread_to_list():
+    import os
+    import errno
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    data = xerox.paste()
+    target = get_threadref_from_url(data)
+    repo = target['user'] + '/' + target['repo']
+    select_list_project(repo)
+    l = sessionlist['list']
+    p = get_list_path(l)
+    try:
+        hndl = os.open(p, flags)
+    except OSError as e:
+        if e.errno == errno.EEXIST:
+            # pass
+            with open(p, "a") as f:
+                f.write('\n' + repo)
+        else:
+            raise
+    else:
+        with os.fdopen(hndl, "w+") as f:
+            f.write(stamp('#+title: Contact sheet for magazine issue {}'
+                ).format(l) + repo)
+
+def list_threads(act):
+    '''Creates a list view of threads with their corresponding contact
+    names beside them.'''
+    scan_contacts()
+    items = []
+    items = get_list_sessions()
+    return items
+
+def autoput_contact_profile_info(s):
+    data = xerox.paste()
+    i = 0
+    for line in data.split():
+        if len(line):
+            if i == 0:
+                l = line.split(' ')
+                s['name'] = l[0] + ' ' + l[1]
+            elif i == 1:
+                s['bio'] = line
+            elif i == 3:
+                s['job'] = line
+            elif i == 4:
+                s['loc'] = line
+            elif i == 5:
+                s['email'] = line
+            elif i == 6:
+                s['page'] = line
+            i += 1
+
+def add_status_actions(s, status, items):
+    items.append(('actions| |-+ add contact profile info',
+        partial(autoput_contact_profile_info, s)))
+    items.append(('       |-+ put intro message in outbox',
+        partial(autoput_contact_profile_info, s)))
+    items.append(('       vwv |-+ view last message',
+        lambda: print(get_last_message(s))))
+    return items
+
+def process_list_headers(lines):
+    i = 0
+    for line in lines:
+        if line.startswith('#+'):
+            i += 1
+            if line.startswith('#+stamp'):
+                print(line)
+        else:
+            return lines[i:]
+
+def add_list_prompt(n):
+    l = len(n)
+    p = '{} item' if l == 1 else '{} items'
+    print(p.format(l) + '       | Select to see available actions:')
+
+def pad_n(n, s):
+    from math import floor
+    d = n - len(s)
+    if d % 2 == 0:
+        x = int(d / 2)
+        p = ''.join([' '] * x)
+        return p + s + p
+    else:
+        x = int(floor(d / 2))
+        p = ''.join([' '] * x)
+        p1 = ''.join([' '] * (x + 1))
+    return p1 + s + p
+
+def edit_list():
+    '''Creates a list build view of campaigns (plans) or of projects
+    to feature in a given campaign.'''
+    items = []
+    l = sessionlist['list']
+    if len(l) > 0:
+        print('current: {} [listbuilder]'.format(l))
+        items.append((' ← pick a different list to edit',
+            reset_list_pick))
+        items.append((' + add thread to list',
+            append_save_thread_to_list))
+        listfile = get_list_path(l)
+        try:
+            with open(listfile, "r") as f:
+                n = process_list_headers(f.readlines())
+                add_list_prompt(n)
+                for project in n: 
+                #def get_thread_status(project):
+                    prj = project.strip()
+                    slash = prj.index('/')
+                    user = prj[:slash]
+                    repo = prj[slash + 1:]
+                    c = load_contact(user)
+                    #return project + '[{}]'.format(c['status'])
+                    #status = get_thread_status(project)
+                    status = c['status']
+                    items.append(('{0}| {1}'.format(pad_n(9, status), 
+                        prj), partial(select_list_project, prj)))
+                    if prj == sessionlist['curr']:
+                        if session['repo'] == c['repo']:
+                            reset_list_selection()
+                        else:
+                            set_session(c)
+                            add_status_actions(c, status, items)
+        except FileNotFoundError:
+            print('[No items in list]')
+    else:
+        print('Pick a plan list to edit:')
+        for threadlist in ls[get_session_repo]().split():
+            with open(threadlist, "r") as f:
+                for repo in f.readlines():
+                    print(repo)
+    return items
+
+def edit_settings():
+    '''Creates a list view of settings with their toggles.'''
+    items = []
+    items.append(
+        ('|x| autoclone repository when git url is given',
+            partial(print, 'autoclone'))
+    )
     return items
 
 @climenu.group(items_getter=edit_thread, items_getter_kwargs={
@@ -302,8 +558,18 @@ def build_group():
 
 #@climenu.group(items_getter=add_to_session, items_getter_kwargs={})
 #def build_group():
-#    '''open list'''
+#    '''plan campaign'''
 #    pass
+
+@climenu.group(items_getter=edit_list, items_getter_kwargs={})
+def build_group():
+    '''open list'''
+    pass
+
+@climenu.group(items_getter=edit_settings, items_getter_kwargs={})
+def build_group():
+    '''edit settings'''
+    pass
 
 @climenu.menu(title='about this software')
 def about():
