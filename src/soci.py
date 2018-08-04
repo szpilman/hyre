@@ -100,7 +100,8 @@ def make_session(name='[unnamed]', user='', repo='', email=''):
 
 session = make_session()
 sessionlist = {'pick': session, 'prev': session,
-        'list': current_issue(), 'curr': '', 'intro': 1}
+        'list': current_issue(), 'curr': '', 'intro': 1,
+        'sort': 'recent'}
 def set_session(s):
     session = s
 
@@ -131,7 +132,7 @@ def contact_front_matter(name, email, keep_stamp=False, other=False):
     o = ''
     if other:
         for i in ['job', 'bio', 'page', 'loc']:
-            if i in other:
+            if i in other and len(other[i]):
                 o += '#+{0}: {1}\n'.format(i, other[i])
     meta = '#+source: github'
     if keep_stamp:
@@ -168,6 +169,8 @@ def serialize_session(s, require_filename=False, keep_stamp=False):
                 t = '# [{0}] {1} in a Python open source newsletter\n'
                 text = (t + '##+repo: {2}').format(l, msg['repo'],
                         msg['url']) + text
+                if 'repo2' in s:
+                    text += '\n##+repo2: {}'.format(s['repo2'])
         f.write(text)
     return filepath
 
@@ -268,16 +271,7 @@ def get_threadref_from_url(url):
 def get_project_url(user, repo):
     return 'https://github.com/{0}/{1}'.format(user, repo)
 
-intromsg = """
-Hi {0},
-
-I'm writing a technical article for my newsletter, The Open Hyre, and your library {1} is used for parts of code shown and also used in an open source tool to be released.
-
-Since I'm using the library, I'd like to also feature {1} in the newsletter if it's fine with you. The newsletter's main and most important section is like classifieds for open source tasks. To feature {1}, I only need from you a task from your issues tracker that's easy to do for a beginner with Python/open source--it could be documentation or text corrections even.
-
-Thanks,
-Bernardo
-"""
+intromsg = "Hi {0},\n\nI'm writing a technical article for my newsletter, The Open Hyre, and your library {1} is used for parts of code shown and also used in an open source tool to be released.\n\nSince I'm using the library, I'd like to also feature {1} in the newsletter if it's fine with you. The newsletter's main and most important section is like classifieds for open source tasks. To feature {1}, I only need from you a task from your issues tracker that's easy to do for a beginner with Python/open source--it could be documentation or text corrections even.\n\nThanks!\nBernardo"
 
 def intro_msg(s):
     return intromsg.format(s['name'].split(' ')[0], s['repo'])
@@ -300,18 +294,12 @@ def load_contact(contact):
     else:
         user = contact
     with open(get_contact_path(contact), "r") as f:
-        soci = []
-        name = '[unnamed]'
-        repo = ''
-        email = ''
-        stamp = ''
-        status = '[unknown]'
-        last = ''
-        l = ''
-        s = session
+        soci, name, repo, email = [], '[unnamed]', '', ''
+        job, bio, page, loc = '', '', '', ''
+        stamp, status, last, l, s = '', '[unknown]', '', '', session
         for line in f.readlines():
             i = len(soci) - 1
-            if i > 0 and not line.startswith('#'):
+            if i >= 0 and not line.startswith('#'):
                 if 'to' in soci[i]:
                     soci[i]['to'] += line
                 elif 'from' in soci[i]:
@@ -320,6 +308,14 @@ def load_contact(contact):
                 name = line[8:].strip()
             elif line.startswith('#+stamp: '):
                 stamp = line[8:].strip()
+            elif line.startswith('#+job: '):
+                job = line[6:].strip()
+            elif line.startswith('#+bio: '):
+                bio = line[6:].strip()
+            elif line.startswith('#+page: '):
+                page = line[7:].strip()
+            elif line.startswith('#+loc: '):
+                bio = line[6:].strip()
             elif line.startswith('#+email: '):
                 email = line[8:].strip()
             elif line.startswith('#+'):
@@ -328,6 +324,7 @@ def load_contact(contact):
                 item = {}
                 if line[3:7] == 'to: ':
                     status = 'sent'
+                    # TODO if sent recently add e.g. '27th' beside 'sent'
                     item = {'to': '', 'date': line[7:].strip()}
                 if line[3:6] == 'to ':
                     status = 'outbox'
@@ -363,13 +360,14 @@ def load_create_contact(usr, repository):
         s = make_session(repo=repository, user=usr)
         p = get_session_metarepo() + contactdir + usr + get_hyre_ext()
         s['path'] = p
+        s['status'] = 'draft'
         with open(p, "w+") as f:
             f.write(contact_front_matter(s['name'], s['email']))
             l = current_issue()
             t = '# [{0}] {1} in a Python open source newsletter\n'
             text = (t + '##+repo: {2}').format(l, repository,
                     get_project_url(usr, repository)) + '\n'
-            text += '## to\n' + intro_msg() + '\n'
+            text += '## to\n' + intro_msg(s) + '\n'
             f.write(text)
         return s
 
@@ -461,21 +459,31 @@ def autoput_contact_profile_info(s):
     data = xerox.paste()
     i = 0
     for line in data.split('\n'):
+        print(s)
         if len(line):
+            a = 1
             if i == 0:
                 l = line.split()
                 s['name'] = l[0] + ' ' + l[1]
             elif i == 1:
-                s['bio'] = line
-            elif i == 3:
+                if len(line.split()) > 2:
+                    s['bio'] = line
+                else:
+                    a = 0
+            elif i == 2:
                 s['job'] = line.strip()
-            elif i == 4:
+            elif i == 3:
                 s['loc'] = line.strip()
-            elif i == 5:
+            elif i == 4:
                 s['email'] = line.strip()
-            elif i == 6:
+            elif i == 5:
                 s['page'] = line.strip()
-            i += 1
+            i += a
+    serialize_session(s)
+
+def add_second_repo(s):
+    data = xerox.paste()
+    s['repo2'] = data.strip()
     serialize_session(s)
 
 def set_intro(i):
@@ -521,7 +529,7 @@ def add_status_actions(s, status, items):
             partial(autoput_contact_profile_info, s)))
     else:
         items.append(('       |   |-+ add second repository to contact',
-            partial(autoput_contact_profile_info, s)))
+            partial(add_second_repo, s)))
     items.append(('       |-+ put intro message in outbox',
         partial(autoput_contact_profile_info, s)))
     items.append(('       vwv |-+ view last message',
@@ -574,19 +582,26 @@ def edit_list():
             reset_list_pick))
         items.append((' + add thread to list',
             append_save_thread_to_list))
+        order = sessionlist['sort']
+        if order == 'recent':
+            items.append((' ^ sort by oldest first',
+                append_save_thread_to_list))
+        elif order == 'old':
+            items.append((' v sort by most recent first',
+                append_save_thread_to_list))
         listfile = get_list_path(l)
         try:
             with open(listfile, "r") as f:
                 n = process_list_headers(f.readlines())
                 add_list_prompt(n)
-                for project in n: 
+                for project in reversed(n):
                 #def get_thread_status(project):
                     prj = project.strip()
                     slash = prj.index('/')
                     user = prj[:slash]
 
                     #repo = prj[slash + 1:]
-                    repo = prj[slash:].strip()
+                    repo = prj[slash + 1:].strip()
 
                     c = load_create_contact(user, repo)
                     #return project + '[{}]'.format(c['status'])
